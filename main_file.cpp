@@ -36,7 +36,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "static/models/floor.h"
 #include "static/models/myCube.h"
 #include "static/models/myTeapot.h"
-#include "static/models/walls.h"
+#include "static/models/sky.h"
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -60,17 +60,18 @@ float aspectRatio = 1;
 
 float sensitivity = 0.5f;
 
-ShaderProgram *sp, *csp; // Pointer to the shader program
+ShaderProgram *sp, *csp, *model_sp,*fsp; // Pointer to the shader program
 Camera *camera;
 Movement *movement;
 Maze *maze;
 Model *treeModel;
 
-GLuint tex0;
-GLuint tex1;
+GLuint tex0, tex1, enemyDiffusion, enemyNormal, enemyS, enemyAO, enemyE,skyTex;
 GLuint grassTex;
 GLuint left;
 GLuint right;
+
+GLuint brick_tex0, brick_tex1, brick_tex2;
 
 // Key state tracking
 std::unordered_map<int, bool> keyStates;
@@ -108,6 +109,8 @@ void windowResizeCallback(GLFWwindow *window, int width, int height) {
 void initOpenGLProgram(GLFWwindow *window) {
     glClearColor(0, 0, 0, 1);
     glEnable(GL_DEPTH_TEST);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
     glfwSetWindowSizeCallback(window, windowResizeCallback);
     glfwSetInputMode(window, GLFW_STICKY_KEYS, GLFW_TRUE);
     glfwSetKeyCallback(window, keyCallback);
@@ -118,7 +121,9 @@ void initOpenGLProgram(GLFWwindow *window) {
         glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
 
     sp = new ShaderProgram("v_simplest.glsl", NULL, "f_simplest.glsl");
+    model_sp = new ShaderProgram("v_model.glsl", NULL, "f_model.glsl");
     csp = new ShaderProgram("v_cross.glsl", NULL, "f_cross.glsl");
+    fsp = new ShaderProgram("v_floor.glsl", NULL, "f_floor.glsl");
     camera = new Camera(CAMERA_ROTATION_LIMIT, FOV, NEAR_PLANE, FAR_PLANE,
                         sensitivity, aspectRatio);
     maze = new Maze(MAZE_WIDTH, MAZE_HEIGHT);
@@ -127,50 +132,68 @@ void initOpenGLProgram(GLFWwindow *window) {
     // maze->print_maze(); // Print the generated maze to the console
     movement = new Movement(INITIAL_SPEED, maze);
 
-    tex0 = readTexture("static/img/ivy-wall.png");
-    tex1 = readTexture("static/img/ivy_wall_diffuse.png");
     grassTex = readTexture("static/img/grass.png");
+    skyTex = readTexture("static/img/Moon.png");
     left = readTexture("static/img/bron.png");
     right = readTexture("static/img/lampa.png");
+    enemyDiffusion = readTexture("static/models/zengwu_battle@body@D.png");
+    enemyNormal = readTexture("static/models/zengwu_battle@body@N.png");
+    enemyS = readTexture("static/models/zengwu_battle@body@S.png");
+    enemyAO = readTexture("static/models/zengwu_battle@body@ao.png");
+    enemyE = readTexture("static/models/zengwu_battle@body@e.png");
+    brick_tex0 = readTexture("static/img/ivy-diffuse.png");
+    brick_tex1 = readTexture("static/img/ivy-normal.png");
+    brick_tex2 = readTexture("static/img/ivy-height.png");
+
+    std::vector<GLuint> treeTextures = {enemyDiffusion, enemyNormal, enemyAO,
+                                        enemyAO, enemyE};
 
     treeModel = new Model();
-    treeModel->loadModel(std::string("static/models/Tree01_OBJ.obj"), sp);
+    treeModel->loadModel(std::string("static/models/Model.obj"), model_sp,
+                         treeTextures);
 }
 
 // Free OpenGL resources
 void freeOpenGLProgram(GLFWwindow *window) { delete sp; }
 
-void drawFloor(const glm::mat4 &M) {
-
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glUniformMatrix4fv(sp->u("M"), 1, false, glm::value_ptr(M));
-    glEnableVertexAttribArray(sp->a("vertex"));
-    glVertexAttribPointer(sp->a("vertex"), 4, GL_FLOAT, false, 0,
-                          floorVertices);
-
-    glEnableVertexAttribArray(sp->a("texCoord0"));
-    glVertexAttribPointer(sp->a("texCoord0"), 2, GL_FLOAT, false, 0,
-                          floorTexCoords);
-
-    glEnableVertexAttribArray(sp->a("normal"));
-    glVertexAttribPointer(sp->a("normal"), 4, GL_FLOAT, false, 0, floorNormals);
-
+void drawFloor(const glm::mat4 &M, float x, float z) {
+    glm::mat4 M_translate = glm::translate(M, glm::vec3(x, 0.0f, z));
+    glUniformMatrix4fv(fsp->u("M"), 1, false, glm::value_ptr(M_translate));
+    glEnableVertexAttribArray(fsp->a("vertex"));
+    glVertexAttribPointer(fsp->a("vertex"), 4, GL_FLOAT, false, 0,floorVertices);
+    glEnableVertexAttribArray(fsp->a("texCoord0"));
+    glVertexAttribPointer(fsp->a("texCoord0"), 2, GL_FLOAT, false, 0,floorTexCoords);
+    glEnableVertexAttribArray(fsp->a("normal"));
+    glVertexAttribPointer(fsp->a("normal"), 4, GL_FLOAT, false, 0, floorNormals);
+    
     glActiveTexture(GL_TEXTURE0); // Assign texture tex0 to the 0-th texturing
-                                  // unit
     glBindTexture(GL_TEXTURE_2D, grassTex);
-    glUniform1i(
-        sp->u("textureMap0"),
-        0); // Associate sampler textureMap0 with the 0-th texturing unit
-
+    glUniform1i(fsp->u("textureMap0"),0); // Associate sampler textureMap0 with the 0-th texturing unit
+    
     glDrawArrays(GL_TRIANGLES, 0, floorVertexCount); // Draw the object
-
-    glDisableVertexAttribArray(
-        sp->a("vertex")); // Disable sending data to the attribute vertex
-    glDisableVertexAttribArray(
-        sp->a("texCoord0")); // Disable sending data to the attribute texCoord0
-    glDisableVertexAttribArray(
-        sp->a("normal")); // Disable sending data to the attribute normal
+    
+    glDisableVertexAttribArray(fsp->a("vertex")); // Disable sending data to the attribute vertex
+    glDisableVertexAttribArray(fsp->a("texCoord0")); // Disable sending data to the attribute texCoord0
+    glDisableVertexAttribArray(fsp->a("normal")); // Disable sending data to the attribute normal
+}
+void drawSky(const glm::mat4 &M) {
+    glUniformMatrix4fv(fsp->u("M"), 1, false, glm::value_ptr(M));
+    glEnableVertexAttribArray(fsp->a("vertex"));
+    glVertexAttribPointer(fsp->a("vertex"), 4, GL_FLOAT, false, 0,skyVertices);
+    glEnableVertexAttribArray(fsp->a("texCoord0"));
+    glVertexAttribPointer(fsp->a("texCoord0"), 2, GL_FLOAT, false, 0,skyTexCoords);
+    glEnableVertexAttribArray(fsp->a("normal"));
+    glVertexAttribPointer(fsp->a("normal"), 4, GL_FLOAT, false, 0, skyNormals);
+    
+    glActiveTexture(GL_TEXTURE0); // Assign texture tex0 to the 0-th texturing
+    glBindTexture(GL_TEXTURE_2D, skyTex);
+    glUniform1i(fsp->u("textureMap0"),0); // Associate sampler textureMap0 with the 0-th texturing unit
+    
+    glDrawArrays(GL_TRIANGLES, 0, skyVertexCount); // Draw the object
+    
+    glDisableVertexAttribArray(fsp->a("vertex")); // Disable sending data to the attribute vertex
+    glDisableVertexAttribArray(fsp->a("texCoord0")); // Disable sending data to the attribute texCoord0
+    glDisableVertexAttribArray(fsp->a("normal")); // Disable sending data to the attribute normal
 }
 
 void printMatrix(const glm::mat4 &mat) {
@@ -188,40 +211,77 @@ void drawCube(const glm::mat4 &M, float x, float z) {
     glm::mat4 M_translate = glm::translate(M, glm::vec3(x, 0.0f, z));
 
     glUniformMatrix4fv(sp->u("M"), 1, false, glm::value_ptr(M_translate));
-    glEnableVertexAttribArray(sp->a("vertex"));
-    glVertexAttribPointer(sp->a("vertex"), 4, GL_FLOAT, false, 0,
-                          myCubeVertices);
 
-    glEnableVertexAttribArray(sp->a("texCoord0"));
-    glVertexAttribPointer(sp->a("texCoord0"), 2, GL_FLOAT, false, 0,
-                          myCubeTexCoords);
+    glEnableVertexAttribArray(
+        sp->a("vertex")); // Włącz przesyłanie danych do atrybutu vertex
+    glVertexAttribPointer(
+        sp->a("vertex"), 4, GL_FLOAT, false, 0,
+        myCubeVertices); // Wskaż tablicę z danymi dla atrybutu vertex
 
-    glEnableVertexAttribArray(sp->a("normal"));
-    glVertexAttribPointer(sp->a("normal"), 4, GL_FLOAT, false, 0,
-                          myCubeNormals);
+    glEnableVertexAttribArray(
+        sp->a("color")); // Włącz przesyłanie danych do atrybutu color
+    glVertexAttribPointer(
+        sp->a("color"), 4, GL_FLOAT, false, 0,
+        myCubeColors); // Wskaż tablicę z danymi dla atrybutu color
 
-    glActiveTexture(GL_TEXTURE0); // Assign texture tex0 to the 0-th texturing
-                                  // unit
-    glBindTexture(GL_TEXTURE_2D, tex0);
-    glUniform1i(
-        sp->u("textureMap0"),
-        0); // Associate sampler textureMap0 with the 0-th texturing unit
+    glEnableVertexAttribArray(
+        sp->a("normal")); // Włącz przesyłanie danych do atrybutu normal
+    glVertexAttribPointer(
+        sp->a("normal"), 4, GL_FLOAT, false, 0,
+        myCubeNormals); // Wskaż tablicę z danymi dla atrybutu normal
 
-    glActiveTexture(GL_TEXTURE1); // Assign texture tex1 to the 1-st texturing
-                                  // unit
-    glBindTexture(GL_TEXTURE_2D, tex1);
-    glUniform1i(
-        sp->u("textureMap1"),
-        1); // Associate sampler textureMap1 with the 1-st texturing unit
+    glEnableVertexAttribArray(
+        sp->a("texCoord0")); // Włącz przesyłanie danych do atrybutu texCoord
+    glVertexAttribPointer(
+        sp->a("texCoord0"), 2, GL_FLOAT, false, 0,
+        myCubeTexCoords); // Wskaż tablicę z danymi dla atrybutu texCoord
+    //
+    glEnableVertexAttribArray(
+        sp->a("c1")); // Włącz przesyłanie danych do atrybutu normal
+    glVertexAttribPointer(
+        sp->a("c1"), 4, GL_FLOAT, false, 0,
+        myCubeC1); // Wskaż tablicę z danymi dla atrybutu normal
 
-    glDrawArrays(GL_TRIANGLES, 0, myCubeVertexCount); // Draw the object
+    glEnableVertexAttribArray(
+        sp->a("c2")); // Włącz przesyłanie danych do atrybutu normal
+    glVertexAttribPointer(
+        sp->a("c2"), 4, GL_FLOAT, false, 0,
+        myCubeC2); // Wskaż tablicę z danymi dla atrybutu normal
+
+    glEnableVertexAttribArray(
+        sp->a("c3")); // Włącz przesyłanie danych do atrybutu normal
+    glVertexAttribPointer(
+        sp->a("c3"), 4, GL_FLOAT, false, 0,
+        myCubeC3); // Wskaż tablicę z danymi dla atrybutu normal
+
+    glUniform1i(sp->u("textureMap0"), 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, brick_tex0);
+
+    glUniform1i(sp->u("textureMap1"), 1);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, brick_tex1);
+
+    glUniform1i(sp->u("textureMap2"), 2);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, brick_tex2);
+
+    glDrawArrays(GL_TRIANGLES, 0, myCubeVertexCount); // Narysuj obiekt
 
     glDisableVertexAttribArray(
-        sp->a("vertex")); // Disable sending data to the attribute vertex
+        sp->a("vertex")); // Wyłącz przesyłanie danych do atrybutu vertex
     glDisableVertexAttribArray(
-        sp->a("texCoord0")); // Disable sending data to the attribute texCoord0
+        sp->a("color")); // Wyłącz przesyłanie danych do atrybutu color
     glDisableVertexAttribArray(
-        sp->a("normal")); // Disable sending data to the attribute normal
+        sp->a("normal")); // Wyłącz przesyłanie danych do atrybutu normal
+    glDisableVertexAttribArray(
+        sp->a("texCoord0")); // Wyłącz przesyłanie danych do atrybutu texCoord0
+    glDisableVertexAttribArray(
+        sp->a("c1")); // Wyłącz przesyłanie danych do atrybutu texCoord0
+    glDisableVertexAttribArray(
+        sp->a("c2")); // Wyłącz przesyłanie danych do atrybutu texCoord0
+    glDisableVertexAttribArray(
+        sp->a("c3")); // Wyłącz przesyłanie danych do atrybutu texCoord0
 }
 
 void drawMaze(const glm::mat4 &M) {
@@ -233,11 +293,14 @@ void drawMaze(const glm::mat4 &M) {
     // Draw each wall in the maze
     for (int y = 0; y < maze->height; ++y) {
         for (int x = 0; x < maze->width; ++x) {
+            float posX = x * blockSize - offsetX;
+            float posZ = y * blockSize - offsetZ;
             if (maze->maze[y][x] == 1) {
-                float posX = x * blockSize - offsetX;
-                float posZ = y * blockSize - offsetZ;
+                sp->use();
                 drawCube(M, posX, posZ);
             }
+            fsp->use();
+            drawFloor(M,posX,posZ);
         }
     }
 
@@ -294,6 +357,8 @@ void drawHud(GLuint leftHandTex, GLuint rightHandTex) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     csp->use();
+    // std::cout << "Left hand tex ID: " << leftHandTex << std::endl;
+    // std::cout << "Right hand tex ID: " << rightHandTex << std::endl;
 
     glm::mat4 V = glm::mat4(1.0f);
     glm::mat4 P = glm::mat4(1.0f);
@@ -364,13 +429,23 @@ void drawScene(GLFWwindow *window, float x_pos, float z_pos) {
     camera->updateCamera(x_pos, z_pos, sp);
     glm::vec3 eye = glm::vec3(x_pos, 0.0f, z_pos); // Pozycja gracza jako kamera
     glUniform3fv(sp->u("cameraPos"), 1, glm::value_ptr(eye));
+
+    fsp->use();
+    glUniform3fv(fsp->u("cameraPos"), 1, glm::value_ptr(eye));
+    camera->updateCamera(x_pos, z_pos, fsp);
     glm::mat4 M = glm::mat4(1.0f);
-    
-    drawFloor(M);
+    drawSky(M);
     drawMaze(M);
-    treeModel->draw(M);
-    drawCrosshair(M);
+
+    model_sp->use();
+
+    glUniform3fv(model_sp->u("cameraPos"), 1, glm::value_ptr(eye));
+    glm::mat4 M_y_0 = glm::translate(M, glm::vec3(0.0f, -1.0f, 0.0f));
+    camera->updateCamera(x_pos, z_pos, model_sp);
+    treeModel->Draw(M_y_0);
+
     drawHud(left, right);
+    drawCrosshair(M);
     glfwSwapBuffers(window);
 }
 
